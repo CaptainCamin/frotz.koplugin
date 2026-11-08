@@ -271,6 +271,17 @@ function RemGlk:_normalize(obj)
             update.grids[#update.grids + 1] = self:_absorb_grid(c, status_parts)
         elseif c.text then                                -- buffer window
             if self:_absorb_buffer(c, update.story) then update.cleared = true end
+        elseif c.draw then                                -- graphics window
+            -- Graphics windows carry flat drawing commands, not text lines.
+            -- Route pictures through the same policy/gallery hook as inline
+            -- images; ignore fills and colours, and keep the story intact.
+            for _, span in ipairs(c.draw) do
+                if span.special == "image" then
+                    self:_absorb_buffer({ text = {
+                        { content = { span } },
+                    } }, update.story)
+                end
+            end
         end
     end
     if #status_parts > 0 then
