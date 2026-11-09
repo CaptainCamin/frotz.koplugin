@@ -41,6 +41,7 @@ local FORMAT_LABELS = {
     zcode = _("Z-machine"),
     glulx = _("Glulx"),
     twine = _("Twine"),
+    tads  = _("TADS 2/3"),
 }
 
 local PRESET_LABELS = {

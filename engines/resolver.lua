@@ -3,6 +3,7 @@
 -- One RemGlk protocol, selected purely by extension:
 --   bocfel — Z-machine  (.z1–.z8, .zblorb, .dat)
 --   git    — Glulx      (.ulx, .gblorb, .blb)
+--   tadsr  — TADS 2/3   (.gam, .t3)
 --   twine  — Twine HTML (.html, .htm), played by qjs + twine/player.js, which
 --            speaks the same JSON (the binary is "qjs", see main.lua). The
 --            extension is not enough here: is_twine_file checks the content.
@@ -27,6 +28,8 @@ Resolver.VM_BY_EXT = {
     zblorb = "bocfel", zlb = "bocfel", dat = "bocfel",
     -- Glulx → git
     ulx = "git", gblorb = "git", glb = "git", blb = "git", blorb = "git",
+    -- TADS 2 and TADS 3 share a RemGlk interpreter.
+    gam = "tadsr", t3 = "tadsr",
     -- Twine (only an HTML file holding a story is a game: is_twine_file)
     html = "twine", htm = "twine",
 }
