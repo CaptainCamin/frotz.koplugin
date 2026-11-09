@@ -43,6 +43,7 @@ export class Engine {
         this.io = io || {};
         this.createFormat = createFormat;
         this.rng = new Rng();
+        this.memory = Object.create(null); // story-wide data survives restart
         // The player replaces this with one that knows the story's folder and
         // the cache for data: images; without them only remote images resolve.
         this.images = new ImageTable(null, null);
@@ -127,6 +128,7 @@ export class Engine {
     }
 
     _enter(name) {
+        if (this.format.resolvePassage) name = this.format.resolvePassage(name);
         const p = this.passage(name);
         if (!p) {
             this._appendError(`There is no passage named "${name}".`);
@@ -240,6 +242,7 @@ export class Engine {
     // ── links and regions ──────────────────────────────────────────────────
 
     registerAction(action) {
+        if (this.format.wrapAction) action = this.format.wrapAction(action);
         const id = ++this._linkIds;
         this.actions.set(id, action);
         return id;
@@ -488,6 +491,7 @@ export class Engine {
         return JSON.stringify({
             kind: "twine-save", version: 1,
             ifid: this.story.ifid, story: this.story.name,
+            memory: serialize(this.memory),
             moment: m, history: this.history.slice(0, m.hist),
         });
     }
@@ -501,6 +505,10 @@ export class Engine {
         }
         if (!this.passage(d.moment.passage)) {
             throw new Error(`The saved passage "${d.moment.passage}" no longer exists.`);
+        }
+        if (typeof d.memory === "string") {
+            const memory = deserialize(d.memory);
+            if (memory && typeof memory === "object" && !Array.isArray(memory)) Object.assign(this.memory, memory);
         }
         this.history = Array.isArray(d.history) ? d.history : [];
         this.moments = [d.moment];

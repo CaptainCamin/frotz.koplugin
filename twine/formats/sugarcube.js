@@ -10,7 +10,74 @@ import { parseLink, parseDuration } from "./common.js";
 import { GotoSignal } from "../engine.js";
 import { clone } from "../state.js";
 import { Writer } from "../writer.js";
+import { parseAttrs } from "../extract.js";
 import { Revisions } from "./revision.js";
+
+// SugarCube extends native arrays, including arrays created by author scripts.
+// Keep these non-enumerable, as in SugarCube, and use the player's seeded
+// Math.random so replay, undo and loading a save consume the same random draws.
+if (!Array.prototype.random) Object.defineProperty(Array.prototype, "random", {
+    configurable: true, writable: true,
+    value: function () {
+        return this.length ? this[Math.floor(Math.random() * this.length)] : undefined;
+    },
+});
+if (!Array.prototype.contains) Object.defineProperty(Array.prototype, "contains", {
+    configurable: true, writable: true,
+    value: function (value) { return this.includes(value); },
+});
+if (!Array.prototype.delete) Object.defineProperty(Array.prototype, "delete", {
+    configurable: true, writable: true,
+    value: function (...values) {
+        const removed = [];
+        for (const value of [].concat(...values)) {
+            let index;
+            while ((index = this.indexOf(value)) !== -1) {
+                removed.push(...this.splice(index, 1));
+            }
+        }
+        return removed;
+    },
+});
+
+for (const [name, method] of Object.entries({
+    pushUnique: function (...values) {
+        for (const value of values) if (!this.includes(value)) this.push(value);
+        return this.length;
+    },
+    count: function (value) { return this.filter(item => item === value).length; },
+    includesAll: function (...values) { return values.flat().every(value => this.includes(value)); },
+})) {
+    if (!Array.prototype[name]) Object.defineProperty(Array.prototype, name, {
+        configurable: true, writable: true, value: method,
+    });
+}
+if (!String.prototype.toUpperFirst) Object.defineProperty(String.prototype, "toUpperFirst", {
+    configurable: true, writable: true,
+    value: function () { return this.charAt(0).toUpperCase() + this.slice(1); },
+});
+
+// A regex literal may contain quotes, operator words, and even ">>". Skip
+// its complete body before processing macro boundaries or TwineScript sugar.
+function regexEnd(s, i, initial = false) {
+    if (s[i] !== "/" || s[i + 1] === "/" || s[i + 1] === "*") return -1;
+    const before = s.slice(0, i).trimEnd();
+    if (!initial && before && !/[([=,:;!?{}|&+*%~^-]$/.test(before)
+        && !/\b(?:return|case|typeof|void|delete|to|is|isnot|eq|neq|and|or|not)$/.test(before)) return -1;
+    let inClass = false;
+    for (let j = i + 1; j < s.length; j++) {
+        if (s[j] === "\\") { j++; continue; }
+        if (s[j] === "\n") return -1;
+        if (s[j] === "[") inClass = true;
+        else if (s[j] === "]") inClass = false;
+        else if (s[j] === "/" && !inClass) {
+            j++;
+            while (/[a-z]/i.test(s[j] || "")) j++;
+            return j;
+        }
+    }
+    return -1;
+}
 
 // ── markup parser ────────────────────────────────────────────────────────────
 
@@ -43,8 +110,11 @@ function at(re, s, i) {
 
 // End of a macro's arguments: index of the ">>" that closes it.
 function argsEnd(s, i) {
+    const start = i;
     while (i < s.length) {
         const c = s[i];
+        const reEnd = c === "/" ? regexEnd(s, i, !s.slice(start, i).trim()) : -1;
+        if (reEnd >= 0) { i = reEnd; continue; }
         if (c === '"' || c === "'" || c === "`") {
             let j = i + 1;
             while (j < s.length && s[j] !== c) j += s[j] === "\\" ? 2 : 1;
@@ -176,6 +246,30 @@ class Parser {
                     this.i = end;
                     continue;
                 }
+                // Accessible labels on simple icon elements are their text-mode
+                // equivalent (notably board-game pieces drawn with icon fonts).
+                const labelled = at(/<(div|span)\b([^>]*)>([^<]*)<\/\1\s*>/iy, s, i);
+                if (labelled) {
+                    const attrs = parseAttrs(labelled[2]);
+                    if (attrs["aria-label"] !== undefined) {
+                        push({ t: "labelled", open: "<" + labelled[1] + labelled[2] + ">",
+                            close: "</" + labelled[1] + ">", label: attrs["aria-label"],
+                            dynamic: /@aria-label\s*=/i.test(labelled[2]) });
+                        this.i += labelled[0].length;
+                        continue;
+                    }
+                }
+                const button = at(/<button\b([^>]*)>([\s\S]*?)<\/button\s*>/iy, s, i);
+                if (button) {
+                    const attrs = parseAttrs(button[1]);
+                    if (attrs.onclick !== undefined) {
+                        push({ t: "htmlbutton", label: attrs["aria-label"], body: button[2], code: attrs.onclick,
+                            dynamicLabel: /@aria-label\s*=/i.test(button[1]),
+                            dynamicCode: /@onclick\s*=/i.test(button[1]) });
+                        this.i += button[0].length;
+                        continue;
+                    }
+                }
                 const m = at(TAG_RE, s, i);
                 if (m) { text += m[0]; this.i += m[0].length; continue; }
             }
@@ -305,6 +399,8 @@ export function desugar(src, opts = {}) {
     const s = src;
     while (i < s.length) {
         const c = s[i];
+        const reEnd = c === "/" ? regexEnd(s, i) : -1;
+        if (reEnd >= 0) { out += s.slice(i, reEnd); i = reEnd; continue; }
         if (c === '"' || c === "'" || c === "`") {
             let j = i + 1;
             while (j < s.length && s[j] !== c) j += s[j] === "\\" ? 2 : 1;
@@ -358,10 +454,11 @@ const DOM_WALK = new Set(["firstChild", "lastChild", "nextSibling", "previousSib
     "firstElementChild", "lastElementChild", "nextElementSibling", "previousElementSibling"]);
 
 // Something that swallows any use: jQuery calls, document lookups, UI APIs.
-function inert(onWiki) {
+function inert(onWiki, methods) {
     const fn = function () { return proxy; };
     const proxy = new Proxy(fn, {
         get(_t, prop) {
+            if (methods && Object.prototype.hasOwnProperty.call(methods, prop)) return methods[prop];
             if (prop === "wiki" && onWiki) return (text) => { onWiki(String(text)); return proxy; };
             if (prop === "length") return 0;
             if (DOM_WALK.has(prop)) return null;
@@ -394,6 +491,10 @@ export class SugarCube {
         this.done = [];
         this.revision = null;           // Twine 1 revision macros (revision.js)
         this.timedGoto = null;
+        this.pageElements = new Map();
+        this.settingDefs = new Map();
+        this.captureNames = [];
+        this.dialog = { title: "", text: "", region: null };
         this.buildEnv();
     }
 
@@ -416,7 +517,7 @@ export class SugarCube {
             random() { return engine.rng.next(); },
             prng: { get isEnabled() { return true; }, get pull() { return 0; }, get seed() { return 0; } },
             metadata: new Map(),
-            restart() { engine.warn("State.restart()"); },
+            restart() { engine.restart(); },
         };
         State.metadata.get = State.metadata.get.bind(State.metadata);
         const passageNamed = (name) => passageObj(engine.passage(name));
@@ -424,8 +525,17 @@ export class SugarCube {
             State,
             setup: {},
             settings: {},
-            Setting: inert(),
-            Config: new Proxy({}, { get: (t, k) => (k in t ? t[k] : (t[k] = inert())), set: () => true }),
+            Setting: inert(null, Object.fromEntries(["addToggle", "addList", "addValue"].map(method =>
+                [method, (name, options = {}) => {
+                    self.settingDefs.set(name, { ...options, type: method });
+                    self.env.settings[name] = options.default ?? (method === "addToggle" ? false : options.list?.[0]);
+                    if (typeof options.onInit === "function") options.onInit.call(options);
+                }]))),
+            Config: new Proxy({ debug: false, passages: {}, history: {}, saves: {},
+                navigation: {}, ui: { updateStoryElements: true } }, {
+                get: (t, k) => (k in t ? t[k] : (t[k] = inert())),
+                set: (t, k, v) => { t[k] = v; return true; },
+            }),
             Story: {
                 get title() { return story.name; },
                 get ifId() { return story.ifid; },
@@ -434,13 +544,14 @@ export class SugarCube {
                 lookup: (prop, value) => [...story.passages.values()]
                     .filter((p) => (prop === "tags" ? p.tags.includes(value) : p[prop] === value)).map(passageObj),
                 filter: (fn) => [...story.passages.values()].map(passageObj).filter(fn),
+                lookupWith: (fn) => [...story.passages.values()].map(passageObj).filter(fn),
             },
             Engine: {
                 play: (name) => engine.requestGoto(name),
                 show: () => {},
-                backward: () => engine.warn("Engine.backward()"),
+                backward: () => engine.undo(),
                 forward: () => {},
-                restart: () => engine.warn("Engine.restart()"),
+                restart: () => engine.restart(),
                 get state() { return "idle"; },
                 isIdle: () => true,
             },
@@ -473,6 +584,14 @@ export class SugarCube {
                 const flat = v.flat();
                 return flat[engine.rng.int(0, flat.length - 1)];
             },
+            hasVisited: (...names) => {
+                if (!names.length) throw new Error("hasVisited requires at least one passage name");
+                return names.flat().every(name => (engine.visits[name] || 0) > 0);
+            },
+            setPageElement: (id, names, fallback = "") => {
+                self.pageElements.set(String(id), { names: [].concat(names), fallback: String(fallback) });
+                return inert();
+            },
             visited: (...names) => {
                 if (!names.length) names = [engine.passageName];
                 return Math.min(...names.flat().map((n) => engine.visits[n] || 0));
@@ -497,15 +616,34 @@ export class SugarCube {
             tags: (name) => (engine.passage(name || engine.passageName) || { tags: [] }).tags.slice(),
             turns: () => engine.history.length,
             time: () => engine.clock,
-            memorize: (k, v) => { self.env.setup["__mem_" + k] = v; },
-            recall: (k, d) => { const v = self.env.setup["__mem_" + k]; return v === undefined ? d : v; },
-            forget: (k) => { delete self.env.setup["__mem_" + k]; },
+            memorize: (k, v) => { engine.memory[k] = clone(v); },
+            recall: (k, d) => Object.prototype.hasOwnProperty.call(engine.memory, k) ? clone(engine.memory[k]) : d,
+            forget: (k) => { delete engine.memory[k]; },
             clone: (v) => clone(v),
-            UI: inert(), UIBar: inert(), Dialog: inert(), Save: inert(), SimpleAudio: inert(),
+            UI: inert(null, {
+                restart: () => engine.restart(),
+                settings: () => self.openSettings(),
+                saves: () => {
+                    // Browser save dialogs have no DOM here. Give the player
+                    // a visible route to KOReader's existing save controls.
+                    const w = new Writer(engine);
+                    w.text("\n\nUse the Frotz menu’s Save game or Restore game controls.");
+                    engine.runs.push(...w.runs);
+                },
+            }), UIBar: inert(), Dialog: inert(null, {
+                setup: title => { self.dialog.title = String(title); self.dialog.text = ""; },
+                wiki: text => { self.dialog.text += String(text); return self.env.Dialog; },
+                open: () => self.openDialog(),
+                close: () => {
+                    if (self.dialog.region !== null) engine.fillRegion(self.dialog.region, () => {}, "replace");
+                    self.dialog.region = null;
+                },
+                isOpen: () => self.dialog.region !== null,
+            }), Save: inert(), SimpleAudio: inert(),
             LoadScreen: inert(), L10n: inert(), l10nStrings: {},
             Wikifier: function (_dest, text) { self.wikiIntoCurrent(String(text)); },
             importScripts: () => Promise.resolve(), importStyles: () => Promise.resolve(),
-            $: inert(), jQuery: inert(), document: inert(), window: globalThis,
+            $: inert(text => self.wikiIntoCurrent(text)), jQuery: inert(text => self.wikiIntoCurrent(text)), document: inert(), window: globalThis,
             prehistory: {}, predisplay: {}, prerender: {}, postdisplay: {}, postrender: {},
             // Author scripts and macro libraries check this before loading.
             version: {
@@ -516,7 +654,8 @@ export class SugarCube {
             },
         };
         this.env.SugarCube = { version: this.env.version, Config: this.env.Config, Engine: this.env.Engine,
-            Macro: this.env.Macro, State: State, Story: this.env.Story, setup: this.env.setup };
+            Macro: this.env.Macro, State: State, Story: this.env.Story, setup: this.env.setup,
+            UI: this.env.UI, Dialog: this.env.Dialog, Setting: this.env.Setting };
         this.env.V = State.variables;
         this.env.T = this.temps;
         this.env.Wikifier.wikifyEval = (text) => { self.wikiIntoCurrent(String(text)); return inert(); };
@@ -607,19 +746,133 @@ export class SugarCube {
     // Variables set by StoryInit live in the first moment's snapshot, but
     // `setup` and widgets live here: they're rebuilt by init, not saved.
     render(passage, w) {
+        this.dialog.region = null;
         this.temps = {};
         this.done = [];
         this.depth = 0;
         if (this.revision) this.revision.reset();
         const engine = this.engine;
         const special = (name) => engine.passage(name);
+        this.runTasks("predisplay");
         if (special("PassageReady")) this.silently(special("PassageReady").text);
+        this.runTasks("prerender", w);
         if (special("PassageHeader")) this.renderText(special("PassageHeader").text, w);
         this.renderPassage(passage, w);
         if (special("PassageFooter")) this.renderText(special("PassageFooter").text, w);
+        this.runTasks("postrender", w);
         if (special("PassageDone")) this.silently(special("PassageDone").text);
         for (const fn of this.done) fn(w);
         if (this.revision) this.revision.afterRender();
+        this.runTasks("postdisplay");
+        // Browser formats put these in the persistent sidebar. In a text player
+        // they must be part of the screen: they often contain gameplay actions.
+        for (const name of ["StoryCaption", "StoryMenu"]) {
+            if (special(name)) {
+                w.text("\n\n");
+                this.renderPassage(special(name), w);
+            }
+        }
+        for (const [id, element] of this.pageElements) {
+            const p = element.names.map(name => special(name)).find(Boolean);
+            w.text("\n\n");
+            const region = w.openRegion(["#" + id]);
+            this.renderText(p ? p.text : element.fallback, w);
+            w.closeRegion(region);
+        }
+    }
+
+    snapshot() {
+        return { settings: clone(this.env.settings) };
+    }
+
+    restore(snapshot) {
+        if (!snapshot || !snapshot.settings) return;
+        // Author callbacks retain the settings object passed during init.
+        // Restore its contents without replacing that shared object.
+        for (const key of Object.keys(this.env.settings)) delete this.env.settings[key];
+        Object.assign(this.env.settings, snapshot.settings);
+    }
+
+    resolvePassage(name) {
+        const override = this.env.Config.navigation.override;
+        const result = typeof override === "function" ? override(name) : undefined;
+        return typeof result === "string" ? result : name;
+    }
+
+    wrapAction(action) {
+        // Widgets shadow _args automatically. <<capture>> additionally shadows
+        // named variables, so deferred links use the values from their creation.
+        const names = [...new Set([...this.captureNames, ...(["args", "contents"].filter(k =>
+            this.temps[k] !== undefined).map(k => "_" + k))])];
+        if (!names.length) return action;
+        const binding = name => name[0] === "$" ? this.engine.vars : this.temps;
+        const values = names.map(name => binding(name)[name.slice(1)]);
+        return () => {
+            const saved = names.map(name => binding(name)[name.slice(1)]);
+            names.forEach((name, i) => { binding(name)[name.slice(1)] = values[i]; });
+            try { return action(); }
+            finally {
+                names.forEach((name, i) => {
+                    values[i] = binding(name)[name.slice(1)];
+                    binding(name)[name.slice(1)] = saved[i];
+                });
+            }
+        };
+    }
+
+    openDialog() {
+        if (this.dialog.region !== null) this.env.Dialog.close();
+        const w = new Writer(this.engine);
+        const region = w.openRegion(["#dialog"]);
+        w.text("\n\n");
+        w.beginStyle("header"); w.text(this.dialog.title); w.endStyle("header");
+        w.text("\n");
+        this.dialog.region = region;
+        this.renderText(this.dialog.text, w);
+        w.closeRegion(region);
+        this.engine.runs.push(...w.runs);
+    }
+
+    openSettings() {
+        this.env.Dialog.setup("Settings");
+        this.openDialog();
+        const region = this.dialog.region;
+        const draw = w => {
+            w.text("\n\nSettings\n");
+            for (const [name, def] of this.settingDefs) {
+                const value = this.env.settings[name];
+                const options = def.type === "addToggle" ? [false, true] : def.list;
+                const display = typeof value === "boolean" ? (value ? "On" : "Off") : String(value ?? "");
+                const label = String(def.label || name) + ": " + display;
+                if (options && options.length) {
+                    this.engine.addLink(w, label, () => {
+                        this.env.settings[name] = options[(options.indexOf(value) + 1) % options.length];
+                        if (typeof def.onChange === "function") def.onChange.call(def);
+                        this.engine.fillRegion(region, draw, "replace");
+                    });
+                } else w.text(label);
+                w.text("\n");
+            }
+            this.engine.addLink(w, "Close settings", () => this.env.Dialog.close());
+        };
+        this.engine.fillRegion(region, draw, "replace");
+    }
+
+    runTasks(kind, output) {
+        for (const [name, task] of Object.entries(this.env[kind])) {
+            if (typeof task === "function") {
+                // SugarCube binds tasks to the current passage; render tasks
+                // receive an output element before the task name. Its DOM-only
+                // operations stay inert, while .wiki() can emit text.
+                const passage = this.env.Story.get(this.engine.passageName);
+                const args = output ? [inert(text => this.renderText(text, output)), name] : [name];
+                try { task.call(passage, ...args); }
+                catch (e) {
+                    if (e instanceof GotoSignal) throw e;
+                    this.engine.warn(kind + " " + name + ": " + e.message);
+                }
+            }
+        }
     }
 
     renderPassage(p, w) {
@@ -648,8 +901,10 @@ export class SugarCube {
     }
 
     wikiIntoCurrent(text) {
-        const w = this.outputs[this.outputs.length - 1];
-        if (w) this.renderText(text, w);
+        const current = this.outputs[this.outputs.length - 1];
+        const w = current || new Writer(this.engine);
+        this.renderText(text, w);
+        if (!current) this.engine.runs.push(...w.runs);
     }
 
     onHtmlLink(_target, attrs) {
@@ -685,6 +940,17 @@ export class SugarCube {
                 case "hr": w.text("\u2014 \u2014 \u2014"); break;
                 case "inline": this.renderNodes(n.nodes, w); break;
                 case "link": this.renderLinkNode(n, w); break;
+                case "labelled": this.guard(w, "aria-label", () => {
+                    w.markup(n.open);
+                    w.text(n.dynamic ? String(this.evaluate(n.label)) : n.label);
+                    w.markup(n.close);
+                }); break;
+                case "htmlbutton": this.guard(w, "<button>", () => {
+                    const label = n.dynamicLabel ? String(this.evaluate(n.label)) : n.label;
+                    const code = n.dynamicCode ? String(this.evaluate(n.code)) : n.code;
+                    this.engine.addLink(w, label || (lw => this.renderText(n.body, lw)), () => this.runScript(code));
+                    w.text(" ");
+                }); break;
                 case "image": {
                     // [img[$var]]: a source that is a variable is looked up.
                     const draw = (iw) => this.guard(iw, "[img[" + n.src + "]]", () => {
@@ -701,7 +967,7 @@ export class SugarCube {
                     }
                     break;
                 }
-                case "naked": this.guard(w, n.expr, () => this.printValue(this.evaluate(n.expr), w, false)); break;
+                case "naked": this.guard(w, n.expr, () => this.printValue(this.evaluate(n.expr), w, true)); break;
                 case "macro":
                     if (this.revision && this.revision.takesRest(n)) {
                         // Twine 1 <<continue>>: what follows here is its last version.
@@ -940,7 +1206,12 @@ const MACROS = {
         w.endStyle("collapse");
     },
     silently(n) { this.silentSection(n.sections[0]); },
-    capture(n, w) { this.renderSection(n.sections[0], w); },
+    capture(n, w) {
+        const previous = this.captureNames;
+        this.captureNames = previous.concat(n.args.match(/[$_][A-Za-z_$][\w$]*/g) || []);
+        try { this.renderSection(n.sections[0], w); }
+        finally { this.captureNames = previous; }
+    },
     type(n, w) { this.renderSection(n.sections[0], w); },
     do(n, w) { this.renderSection(n.sections[0], w); },
     done(n) {

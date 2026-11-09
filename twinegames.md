@@ -4,7 +4,7 @@
 
 Some games include their own JavaScript code or other advanced features that the engine doesn't support. These games may show error messages (undefined variables, unreadable code blocks), hide links, or simply get stuck. Some other games are only available online (mostly on itch.io), so they can't be downloaded and played with the plugin.
 
-The list contains the 70 most rated Twine games on IFDB. 59 of them could be downloaded and tested: 45 of those (76%) are playable (Gold or Silver).
+The list contains the 70 most rated Twine games on IFDB. 59 of them could be downloaded and tested: 47 of those (80%) are playable (Gold or Silver).
 
 **Legend:**
 - **Gold** - Everything works
@@ -32,6 +32,7 @@ The list contains the 70 most rated Twine games on IFDB. 59 of them could be dow
 | 16 | Gold   | Depression Quest | Quinn/Lindsey/Schankler | Twine 1 |
 | 17 | Silver | Hana Feels | Gavin Inglis | Harlowe |
 | 19 | Silver | ULTRA BUSINESS TYCOON III | Porpentine | Twine 1 |
+| 20 | Silver | A Long Way to the Nearest Star | SV Linwood | SugarCube 2 |
 | 22 | Silver | Solarium | Anya Johanna DeNiro | |
 | 23 | Gold   | The Den | Ben Jackson | SugarCube 2 |
 | 26 | Silver | Tavern Crawler | Josh Labelle | Harlowe |
@@ -63,6 +64,7 @@ The list contains the 70 most rated Twine games on IFDB. 59 of them could be dow
 | 63 | Gold   | Swan Hill | Laura Michet | Twine 1 |
 | 64 | Gold   | verses | Kit Riemer | Harlowe |
 | 65 | Gold   | One King to Loot them All | Lancelot | SugarCube 2 |
+| 66 | Silver | 4x4 Galaxy (screen reader edition) | Agnieszka Trzaska | SugarCube 2 |
 | 68 | Gold   | (do not) forget | lectronice | SugarCube 1 |
 | 70 | Silver | Imprimatura | Elizabeth Ballou | SugarCube |
 
@@ -73,7 +75,6 @@ The list contains the 70 most rated Twine games on IFDB. 59 of them could be dow
 | 5  | 16 Ways to Kill a Vampire at McDonalds | Abigail Corfman | Harlowe | Gets stuck early |
 | 9  | Cactus Blue Motel | Astrid Dalmady | | Stuck on the title screen |
 | 18 | Erstwhile | Aster Fialla & Marijke Perry | | Errors; most branches blocked |
-| 20 | A Long Way to the Nearest Star | SV Linwood | SugarCube | Errors; most branches blocked |
 | 21 | The Grown-Up Detective Agency | Brendan Patrick Hennessy | Snowman | Error on the first page |
 | 25 | The Axolotl Project | Samantha Vick | Twine 1 | Error after the first page |
 | 28 | The Absence of Miriam Lane | Abigail Corfman | | Stops after the first page |
@@ -83,7 +84,6 @@ The list contains the 70 most rated Twine games on IFDB. 59 of them could be dow
 | 49 | Begscape | Porpentine | | Doesn't start |
 | 54 | Errand Run | Sophia Zhao | | A needed link disappears |
 | 60 | Uninteractive Fiction 2 | Damon L. Wakes | | Blank page |
-| 66 | 4x4 Galaxy | Agnieszka Trzaska | | A link leads nowhere (error) |
 
 ## Not downloadable
 
@@ -100,3 +100,46 @@ The list contains the 70 most rated Twine games on IFDB. 59 of them could be dow
 | 62 | The Good Ghost | Sarah Willson & Kirk Damato | Only on itch.io |
 | 67 | Ostrich | Jonathan Laury | Only on itch.io |
 | 69 | Aquarium | Harris Powell-Smith | Only on itch.io |
+
+## 4x4 Galaxy
+
+Use the [screen reader edition from the IF Archive](https://ifarchive.org/if-archive/games/springthing/2020/4x4GalaxyScreenReaderFriendly.zip).
+The text player supports its generated galaxy, passage callbacks, inventory sidebar
+(including healing and assembling the quest map), and restart links. Sidebar
+content appears below the passage. Use Frotz’s **Save game** and **Restore game**
+menu entries instead of the browser save dialog. The coloured map and CSS layout
+are simplified to text.
+
+Validation covers all five classes, all three objectives, all sixteen travel
+links, inventory actions, save/undo replay, restart, and seeded exploration.
+Quest endings are also checked from progress checkpoints; this does not mean
+every route through each quest has been exhaustively played.
+
+To repeat the checks with a separately downloaded copy of the game:
+
+```sh
+binaries/x86_64/qjs --std twine/test/regressions.js
+binaries/x86_64/qjs --std twine/test/revision.js
+binaries/x86_64/qjs twine/test/galaxy.js "path/to/4x4 Galaxy_screen reader friendly.html"
+```
+
+## A Long Way to the Nearest Star
+
+The [IFComp 2022 edition](https://ifarchive.org/if-archive/games/competition2022/Games/A%20Long%20Way%20to%20the%20Nearest%20Star.zip)
+now passes the startup and naming sequences that previously failed. SugarCube
+support includes visit checks, page elements, settings, inventory dialogs,
+captured widget/loop arguments, regular expressions, navigation overrides,
+and generated HTML buttons. The board game's legal moves and piece position
+are shown as text, and its scripted AI moves work. Ending unlocks survive
+restart and resume with saved games. Use Frotz’s **Save game / Restore game**
+controls for saves; browser layout and visual effects remain simplified.
+
+The integration test covers the real introduction and inventory interactions,
+name validation, a complete board-game round, puzzle/navigation checkpoints,
+all ending displays from checkpoints, save/undo, and seeded exploration. It
+does not claim complete walkthroughs of every ending or exhaustive branch
+coverage, so the game remains rated Silver.
+
+```sh
+binaries/x86_64/qjs twine/test/neareststar.js "path/to/A_Long_Way_to_the_Nearest_Star.html"
+```
