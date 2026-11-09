@@ -314,6 +314,41 @@ test("SugarCube settings survive author restart", () => {
     check("SugarCube: settings persist through author restart", e.format.env.settings.hints === false && screenText(e).text.includes("Hints: false"), screenText(e).text);
 });
 
+test("SugarCube settings persist through save restore", () => {
+    const html = storyHtml("SugarCube", "2.36.1", {
+        Start: `Hints: <<print settings.hints>> <<link "Off">><<run Setting.setValue("hints", false)>><</link>>`,
+    }, `Setting.addToggle("hints", {default: true});`);
+    const e = loadEngineFromHtml(html);
+    e.start();
+    e.activate(findLink(e, "Off"));
+    const save = e.saveData();
+    const fresh = loadEngineFromHtml(html);
+    fresh.start();
+    fresh.loadData(save);
+    check("SugarCube: save restores settings in a fresh player", fresh.format.env.settings.hints === false && fresh.preferences.settings.hints === false, { settings: fresh.format.env.settings, preferences: fresh.preferences });
+    fresh.restart();
+    check("SugarCube: restored settings survive another restart", fresh.format.env.settings.hints === false && screenText(fresh).text.includes("Hints: false"), screenText(fresh).text);
+});
+
+test("SugarCube setting callbacks replay on save and undo", () => {
+    const html = storyHtml("SugarCube", "2.36.1", {
+        Start: `Changes: <<print $hintChanges>> <<link "Toggle">><<run Setting.setValue("hints", false)>><</link>> [[Go->Next]]`,
+        Next: "next",
+        StoryInit: `<<set $hintChanges to 0>>`,
+    }, `Setting.addToggle("hints", {default: true, onChange: function () {
+        State.variables.hintChanges = (State.variables.hintChanges || 0) + 1;
+    }});`);
+    const e = loadEngineFromHtml(html);
+    e.start();
+    e.activate(findLink(e, "Toggle"));
+    const save = e.saveData();
+    e.loadData(save);
+    check("SugarCube: save replay runs setting callbacks", e.vars.hintChanges === 1, e.vars);
+    e.activate(findLink(e, "Go"));
+    e.undo();
+    check("SugarCube: undo replay runs setting callbacks", e.passageName === "Start" && e.vars.hintChanges === 1 && e.format.env.settings.hints === false, { passage: e.passageName, vars: e.vars, settings: e.format.env.settings });
+});
+
 test("SugarCube HTML buttons tolerate quoted angle brackets", () => {
     const e = loadEngineFromHtml(storyHtml("SugarCube", "2.36.1", {
         Start: `<button aria-label="Compare" onclick="if (1 > 0) $.wiki('<<set $gt to true>>')">icon</button>`

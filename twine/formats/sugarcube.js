@@ -818,6 +818,18 @@ export class SugarCube {
         }
     }
 
+    snapshot() {
+        return { settings: clone(this.env.settings) };
+    }
+
+    restore(snapshot) {
+        if (!snapshot || !snapshot.settings) return;
+        // Author callbacks retain the settings object passed during init.
+        // Restore its contents without replacing that shared object.
+        for (const key of Object.keys(this.env.settings)) delete this.env.settings[key];
+        Object.assign(this.env.settings, snapshot.settings);
+    }
+
     settingStore() {
         let store = this.engine.preferences.settings;
         if (!store || typeof store !== "object" || Array.isArray(store)) {
@@ -830,13 +842,19 @@ export class SugarCube {
         return value === undefined ? undefined : clone(value);
     }
 
-    persistSettings() {
+    persistSetting(name) {
         const store = this.settingStore();
-        for (const name of Object.keys(this.env.settings)) {
-            const value = this.copySetting(this.env.settings[name]);
-            if (value === undefined) delete store[name];
-            else store[name] = value;
-        }
+        const value = this.copySetting(this.env.settings[name]);
+        if (value === undefined) delete store[name];
+        else store[name] = value;
+    }
+
+    persistSettings() {
+        for (const name of Object.keys(this.env.settings)) this.persistSetting(name);
+    }
+
+    beforeSave() {
+        this.persistSettings();
     }
 
     addSetting(name, options, type) {
@@ -850,11 +868,10 @@ export class SugarCube {
     }
 
     setSetting(name, value) {
-        if (this.engine.replaying) return;
         this.env.settings[name] = this.copySetting(value);
         const def = this.settingDefs.get(name);
         if (def && typeof def.onChange === "function") def.onChange.call(def);
-        this.persistSettings();
+        if (!this.engine.replaying) this.persistSetting(name);
     }
 
     resolvePassage(name) {

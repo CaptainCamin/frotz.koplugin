@@ -189,6 +189,13 @@ export class Engine {
         }
     }
 
+    _setPreferences(value) {
+        for (const key of Object.keys(this.preferences)) delete this.preferences[key];
+        if (value && typeof value === "object" && !Array.isArray(value)) {
+            for (const [key, v] of Object.entries(value)) this.preferences[key] = v;
+        }
+    }
+
     _restore(m, memory) {
         this.vars = deserialize(m.vars) || {};
         this.visits = deserialize(m.visits) || {};
@@ -501,10 +508,12 @@ export class Engine {
 
     saveData() {
         const m = this.current;
+        if (this.format.beforeSave) this.format.beforeSave();
         return JSON.stringify({
             kind: "twine-save", version: 1,
             ifid: this.story.ifid, story: this.story.name,
             memory: serialize(this.memory),
+            preferences: serialize(this.preferences),
             moment: m, history: this.history.slice(0, m.hist),
         });
     }
@@ -521,6 +530,10 @@ export class Engine {
         }
         const savedMemory = typeof d.memory === "string" ? deserialize(d.memory) : null;
         const memory = savedMemory && typeof savedMemory === "object" && !Array.isArray(savedMemory) ? savedMemory : {};
+        if (typeof d.preferences === "string") {
+            const preferences = deserialize(d.preferences);
+            if (preferences && typeof preferences === "object" && !Array.isArray(preferences)) this._setPreferences(preferences);
+        }
         this.history = Array.isArray(d.history) ? d.history : [];
         this.moments = [d.moment];
         if (typeof d.moment.memory === "string") this._replay(d.moment);
