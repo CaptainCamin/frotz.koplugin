@@ -379,6 +379,35 @@ test("SugarCube restored settings rerun init", () => {
     check("SugarCube: restored settings rerun onInit", fresh.format.env.settings.hints === false && fresh.format.env.setup.showHints === false, { settings: fresh.format.env.settings, setup: fresh.format.env.setup });
 });
 
+test("SugarCube load does not repeat init side effects", () => {
+    const html = storyHtml("SugarCube", "2.36.1", {
+        Start: `<<link "Off">><<run Setting.setValue("hints", false)>><</link>>`,
+    }, `Setting.addToggle("hints", {default: true, onInit: function () {
+        State.variables.starts = (State.variables.starts || 0) + 1;
+    }});`);
+    const e = loadEngineFromHtml(html);
+    e.start();
+    e.activate(findLink(e, "Off"));
+    const save = e.saveData();
+    const fresh = loadEngineFromHtml(html);
+    fresh.start();
+    fresh.loadData(save);
+    check("SugarCube: load preserves replayed vars over init side effects", fresh.vars.starts === 1, fresh.vars);
+});
+
+test("SugarCube undo preserves unpersisted settings", () => {
+    const html = storyHtml("SugarCube", "2.36.1", {
+        Start: `<<print settings.difficulty>> [[Go->Next]]`,
+        Next: "next",
+        StoryInit: `<<set settings.difficulty to "hard">>`,
+    }, `Setting.addToggle("hints", {default: true});`);
+    const e = loadEngineFromHtml(html);
+    e.start();
+    e.activate(findLink(e, "Go"));
+    e.undo();
+    check("SugarCube: undo keeps story-set settings", e.passageName === "Start" && e.format.env.settings.difficulty === "hard" && e.format.env.settings.hints === true, e.format.env.settings);
+});
+
 test("SugarCube HTML buttons tolerate quoted angle brackets", () => {
     const e = loadEngineFromHtml(storyHtml("SugarCube", "2.36.1", {
         Start: `<button aria-label="Compare" onclick="if (1 > 0) $.wiki('<<set $gt to true>>')">icon</button>`

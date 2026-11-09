@@ -534,11 +534,11 @@ export class Engine {
             const preferences = deserialize(d.preferences);
             if (preferences && typeof preferences === "object" && !Array.isArray(preferences)) this._setPreferences(preferences);
         }
+        if (this.format.prepareLoad) this.format.prepareLoad();
         this.history = Array.isArray(d.history) ? d.history : [];
         this.moments = [d.moment];
         if (typeof d.moment.memory === "string") this._replay(d.moment);
         else this._replay(d.moment, { memory, suppressMemory: true });
         this._setMemory(memory);
-        if (this.format.afterLoad) this.format.afterLoad();
     }
 }

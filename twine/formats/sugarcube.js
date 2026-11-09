@@ -830,17 +830,25 @@ export class SugarCube {
     }
 
     restore(snapshot, options = {}) {
-        // Undo keeps player preferences; saves replay the passage-entry values.
+        // Undo keeps registered player preferences, but preserves unpersisted
+        // settings from the passage snapshot.
         if (options.preservePreferences) {
-            this.applySettings(this.settingStore());
+            this.applySettings(snapshot && snapshot.settings);
+            const store = this.settingStore();
+            for (const name of this.settingDefs.keys()) {
+                if (Object.prototype.hasOwnProperty.call(store, name)) {
+                    this.env.settings[name] = this.copySetting(store[name]);
+                }
+            }
             return;
         }
         if (snapshot && snapshot.settings) this.applySettings(snapshot.settings);
     }
 
-    afterLoad() {
-        // Fresh players initialize before restorestate arrives; rerun setting
-        // init callbacks against the restored values for setup/Config effects.
+    prepareLoad() {
+        // Fresh players initialize before restorestate arrives. Apply saved
+        // preferences and rerun init callbacks before replay overwrites state.
+        this.applySettings(this.settingStore());
         for (const def of this.settingDefs.values()) {
             if (typeof def.onInit === "function") def.onInit.call(def);
         }
