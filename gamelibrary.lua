@@ -19,15 +19,21 @@ local Resolver    = require("engines/resolver")
 local Library = {}
 Library.__index = Library
 
+-- The IFDB browser, game launch, and Bookshelf can hold handles at once. Share
+-- one registry so a later save cannot replace newer fields with a stale copy.
+local shared
+
 function Library.dir()
     return DataStorage:getDataDir() .. "/frotz_library"
 end
 
 function Library.open()
+    if shared then return shared end
     local self = setmetatable({}, Library)
     util.makePath(Library.dir() .. "/covers")
     self.store = LuaSettings:open(Library.dir() .. "/index.lua")
     self.games = self.store:readSetting("games") or {}
+    shared = self
     return self
 end
 
@@ -87,7 +93,7 @@ function Library:scan(directory)
         local ok, iter, state = pcall(lfs.dir, dir)
         if not ok then return end
         for name in iter, state do
-            if name:sub(1, 1) ~= "." then
+            if name ~= "." and name ~= ".." then
                 local path = dir:gsub("/+$", "") .. "/" .. name
                 local mode = lfs.symlinkattributes(path, "mode")
                 if mode == "directory" then

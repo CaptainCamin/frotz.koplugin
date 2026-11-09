@@ -5,9 +5,12 @@ local files = {
     ['/games/a.z5'] = 'file', ['/games/sub/b.ulx'] = 'file',
     ['/games/page.html'] = 'file', ['/games/story.html'] = 'file',
     ['/games/loop'] = 'link', ['/games/readme.txt'] = 'file',
+    ['/hidden'] = 'directory', ['/hidden/.collection'] = 'directory',
+    ['/hidden/.collection/game.z5'] = 'file',
 }
 local children = { ['/games'] = {'.', '..', 'a.z5', 'sub', 'page.html', 'story.html', 'loop', 'readme.txt'},
-    ['/games/sub'] = {'b.ulx'} }
+    ['/games/sub'] = {'b.ulx'}, ['/hidden'] = {'.collection'},
+    ['/hidden/.collection'] = {'game.z5'} }
 local saved, flushes = {}, 0
 package.preload.datastorage = function() return {getDataDir = function() return '/data' end} end
 package.preload.luasettings = function() return {open = function() return {
@@ -31,6 +34,13 @@ local Library = require('gamelibrary')
 local library = Library.open()
 library:put('/games/a.z5', {title = 'Zebra', author = 'An author', cover = 'a.jpg'})
 library:put('/missing.z5', {title = 'Disconnected'})
+local browser_handle = Library.open()
+local launch_handle = Library.open()
+assert(browser_handle == launch_handle, 'concurrent handles share one library')
+launch_handle:put('/games/a.z5', {last_played = 123})
+browser_handle:put('/games/b.z5', {title = 'Shared state'})
+assert(launch_handle:get('/games/a.z5').last_played == 123, 'a later save preserves play time')
+assert(browser_handle:get('/games/b.z5').title == 'Shared state')
 local before = flushes
 assert(library:scan('/games') == 2)
 assert(flushes == before + 1, 'scan writes once')
@@ -64,4 +74,6 @@ assert(records[3].cover_image_path == '/data/frotz_library/covers/a.jpg')
 assert(records[3].format == 'Z5' and records[3].author == 'An author')
 assert(registered.open(records[3]) == true)
 assert(starts[1] == '/games/a.z5', 'game opens through Frotz')
+assert(library:scan('/hidden') == 1, 'hidden folders are imported')
+assert(library:get('/hidden/.collection/game.z5'), 'hidden game is retained')
 print('Game library and Bookshelf integration tests passed')
