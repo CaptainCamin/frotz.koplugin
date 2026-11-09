@@ -43,6 +43,8 @@ export class Engine {
         this.io = io || {};
         this.createFormat = createFormat;
         this.rng = new Rng();
+        this.memory = Object.create(null); // story-wide data survives restart
+        this.preferences = Object.create(null); // player preferences survive restart and replay
         // The player replaces this with one that knows the story's folder and
         // the cache for data: images; without them only remote images resolve.
         this.images = new ImageTable(null, null);
@@ -65,6 +67,7 @@ export class Engine {
         this.lineRequest = null;
         this.pendingGoto = null;
         this.replaying = false;
+        this._suppressMemory = false;
         this._prompts = [];
         this._linkIds = 0;
         this._regionIds = 0;
@@ -127,6 +130,7 @@ export class Engine {
     }
 
     _enter(name) {
+        if (this.format.resolvePassage) name = this.format.resolvePassage(name);
         const p = this.passage(name);
         if (!p) {
             this._appendError(`There is no passage named "${name}".`);
@@ -136,6 +140,7 @@ export class Engine {
             passage: p.name,
             vars: serialize(this.vars),
             visits: serialize(this.visits),
+            memory: serialize(this.memory),
             rng: this.rng.getState(),
             hist: this.history.length,
             fmt: this.format.snapshot ? serialize(this.format.snapshot()) : null,
@@ -177,18 +182,34 @@ export class Engine {
         }
     }
 
-    _restore(m) {
-        this.vars = deserialize(m.vars) || {};
-        this.visits = deserialize(m.visits) || {};
-        this.rng.setState(m.rng);
-        if (this.history.length > m.hist) this.history.length = m.hist;
-        if (this.format.restore) this.format.restore(deserialize(m.fmt));
+    _setMemory(value) {
+        for (const key of Object.keys(this.memory)) delete this.memory[key];
+        if (value && typeof value === "object" && !Array.isArray(value)) {
+            for (const [key, v] of Object.entries(value)) this.memory[key] = v;
+        }
     }
 
-    _replay(m) {
-        this._restore(m);
+    _setPreferences(value) {
+        for (const key of Object.keys(this.preferences)) delete this.preferences[key];
+        if (value && typeof value === "object" && !Array.isArray(value)) {
+            for (const [key, v] of Object.entries(value)) this.preferences[key] = v;
+        }
+    }
+
+    _restore(m, memory, options = {}) {
+        this.vars = deserialize(m.vars) || {};
+        this.visits = deserialize(m.visits) || {};
+        this._setMemory(memory === undefined ? deserialize(m.memory) : memory);
+        this.rng.setState(m.rng);
+        if (this.history.length > m.hist) this.history.length = m.hist;
+        if (this.format.restore) this.format.restore(deserialize(m.fmt), options);
+    }
+
+    _replay(m, options = {}) {
+        this._restore(m, options.memory, options);
         this.pendingGoto = null;
         this.replaying = true;
+        this._suppressMemory = !!options.suppressMemory;
         this._prompts = m.prompts.slice();
         try {
             this._begin(m);
@@ -199,6 +220,7 @@ export class Engine {
             }
         } finally {
             this.replaying = false;
+            this._suppressMemory = false;
             this.pendingGoto = null;
         }
     }
@@ -240,6 +262,7 @@ export class Engine {
     // ── links and regions ──────────────────────────────────────────────────
 
     registerAction(action) {
+        if (this.format.wrapAction) action = this.format.wrapAction(action);
         const id = ++this._linkIds;
         this.actions.set(id, action);
         return id;
@@ -479,15 +502,18 @@ export class Engine {
     undo() {
         if (!this.canUndo()) return false;
         this.moments.pop();
-        this._replay(this.moments[this.moments.length - 1]);
+        this._replay(this.moments[this.moments.length - 1], { preservePreferences: true });
         return true;
     }
 
     saveData() {
         const m = this.current;
+        if (this.format.beforeSave) this.format.beforeSave();
         return JSON.stringify({
             kind: "twine-save", version: 1,
             ifid: this.story.ifid, story: this.story.name,
+            memory: serialize(this.memory),
+            preferences: serialize(this.preferences),
             moment: m, history: this.history.slice(0, m.hist),
         });
     }
@@ -502,8 +528,22 @@ export class Engine {
         if (!this.passage(d.moment.passage)) {
             throw new Error(`The saved passage "${d.moment.passage}" no longer exists.`);
         }
+        const savedMemory = typeof d.memory === "string" ? deserialize(d.memory) : null;
+        const memory = savedMemory && typeof savedMemory === "object" && !Array.isArray(savedMemory) ? savedMemory : {};
+        if (typeof d.preferences === "string") {
+            const preferences = deserialize(d.preferences);
+            if (preferences && typeof preferences === "object" && !Array.isArray(preferences)) this._setPreferences(preferences);
+        }
         this.history = Array.isArray(d.history) ? d.history : [];
         this.moments = [d.moment];
-        this._replay(d.moment);
+        this.current = d.moment;
+        const hasMomentMemory = typeof d.moment.memory === "string";
+        // Let setting init callbacks read saved progress before replay renders;
+        // replay restores again afterward, so their mutations are not committed.
+        this._restore(d.moment, hasMomentMemory ? undefined : memory);
+        if (this.format.prepareLoad) this.format.prepareLoad();
+        if (hasMomentMemory) this._replay(d.moment);
+        else this._replay(d.moment, { memory, suppressMemory: true });
+        this._setMemory(memory);
     }
 }

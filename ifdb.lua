@@ -33,17 +33,19 @@ M.FORMAT_FILTERS = {
     zcode = "format:*z-code*",
     glulx = "format:*glulx*",
     twine = "system:twine",
+    tads  = "format:*tads*",
 }
 -- Format choice (the browser's setting) → the format keys it covers. "both"
 -- predates Twine support and keeps meaning Z-machine + Glulx.
 M.FORMAT_SETS = {
-    all   = { "zcode", "glulx", "twine" },
+    all   = { "zcode", "glulx", "tads", "twine" },
     both  = { "zcode", "glulx" },
     zcode = { "zcode" },
     glulx = { "glulx" },
     twine = { "twine" },
+    tads  = { "tads" },
 }
-M.FORMAT_CHOICES = { "all", "both", "zcode", "glulx", "twine" }
+M.FORMAT_CHOICES = { "all", "both", "zcode", "glulx", "tads", "twine" }
 
 -- Browse lists. IFDB returns nothing for an empty query, so each preset carries
 -- at least the format filter (added by presetQueries).
@@ -58,6 +60,8 @@ M.PRESETS = {
 -- Download-link formats that are a story file for one of our VMs, and the
 -- extension we name the file with when the URL has none we recognise.
 M.LINK_FORMATS = {
+    ["tads2"]       = { ext = "gam",    vm = "tadsr",  label = "TADS 2" },
+    ["tads3"]       = { ext = "t3",     vm = "tadsr",  label = "TADS 3" },
     ["zcode"]       = { ext = "z5",     vm = "bocfel", label = "Z-machine" },
     ["blorb/zcode"] = { ext = "zblorb", vm = "bocfel", label = "Z-machine, blorb" },
     ["glulx"]       = { ext = "ulx",    vm = "git",    label = "Glulx" },
@@ -303,17 +307,20 @@ function M.isTwineSystem(devsys)
 end
 
 --- Whether a game's authoring system can produce a format of the choice:
---- Z-code/Glulx for any system not known to be something else, Twine for the
---- Twine systems. Unknown or custom systems count as yes: the detail screen
+--- Z-code/Glulx for any system not known to be something else, TADS for
+--- TADS systems, and Twine for Twine systems. Unknown or custom systems count as yes: the detail screen
 --- gives the real answer. A game listed under several systems ("TADS 2,
 --- Inform 6") is kept if any of them might be ours.
 function M.isLikelySupported(devsys, format_choice)
     if not devsys or devsys == "" then return true end
     local parser = includes(format_choice, "zcode") or includes(format_choice, "glulx")
     local twine  = includes(format_choice, "twine")
+    local tads   = includes(format_choice, "tads")
     for part in devsys:gmatch("[^,/;]+") do
         if part:match("%S") then
-            if systemIn(TWINE_SYSTEMS, part) then
+            if systemIn({ "tads" }, part) then
+                if tads then return true end
+            elseif systemIn(TWINE_SYSTEMS, part) then
                 if twine then return true end
             elseif parser and not systemIn(UNSUPPORTED_SYSTEMS, part) then
                 return true
@@ -417,6 +424,7 @@ function M.parseGame(decoded)
                     title   = str(l.title),
                     desc    = str(l.desc),
                     format  = str(l.format),
+                    compression = str(l.compression),
                     is_game = l.isGame == true,
                 }
             end
@@ -472,13 +480,20 @@ function M.playableLinks(game, resolver)
         -- that is not a Twine game's story.
         local twine  = twine_game and l.is_game and name
                        and (html or (zip and l.format == "hypertextgame"))
-        local keep   = twine or (l.is_game and name and not html and (by_ext or known))
+        -- Only ZIP archives can be unpacked by the downloader. IFDB also
+        -- tags Mac BinHex/SIT wrappers with the underlying story format;
+        -- renaming those to .gam/.t3 would make an unplayable "story".
+        local compression = type(l.compression) == "string" and l.compression:lower() or ""
+        local unsupported_wrapper = ext == "hqx" or ext == "sit" or ext == "sitx"
+            or (compression ~= "" and compression ~= "zip" and compression ~= "none")
+        local keep   = not unsupported_wrapper and (twine or (l.is_game and name and not html and (by_ext or known)))
         if twine then
             known, by_ext = nil, "twine"
         end
         if keep then
             local label = known and known.label
                           or (by_ext == "twine" and "Twine")
+                          or (by_ext == "tadsr" and "TADS")
                           or (by_ext == "git" and "Glulx" or "Z-machine")
             local filename = name
             if not zip and known and by_ext ~= known.vm then
