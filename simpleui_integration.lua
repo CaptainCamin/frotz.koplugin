@@ -292,8 +292,8 @@ local function _makeQuickAction(plugin)
         is_async_in_place = true,
         execute = function(_ctx)
             local p = _live(plugin)
-            if p and p._openRecentPicker then
-                p:_openRecentPicker(true)   -- true: no recent game → file browser
+            if p and p._openLibrary then
+                p:_openLibrary()
             end
         end,
     }
