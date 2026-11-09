@@ -349,6 +349,36 @@ test("SugarCube setting callbacks replay on save and undo", () => {
     check("SugarCube: undo replay runs setting callbacks", e.passageName === "Start" && e.vars.hintChanges === 1 && e.format.env.settings.hints === false, { passage: e.passageName, vars: e.vars, settings: e.format.env.settings });
 });
 
+test("SugarCube undo keeps player settings", () => {
+    const html = storyHtml("SugarCube", "2.36.1", {
+        Start: `Hints: <<print settings.hints>> [[Go->Next]]`,
+        Next: `<<link "Off">><<run Setting.setValue("hints", false)>><</link>>`,
+    }, `Setting.addToggle("hints", {default: true});`);
+    const e = loadEngineFromHtml(html);
+    e.start();
+    e.activate(findLink(e, "Go"));
+    e.activate(findLink(e, "Off"));
+    check("SugarCube: setting change persists before undo", e.format.env.settings.hints === false, e.format.env.settings);
+    e.undo();
+    check("SugarCube: undo does not revert player settings", e.passageName === "Start" && e.format.env.settings.hints === false && e.preferences.settings.hints === false && screenText(e).text.includes("Hints: false"), { passage: e.passageName, settings: e.format.env.settings, text: screenText(e).text });
+});
+
+test("SugarCube restored settings rerun init", () => {
+    const html = storyHtml("SugarCube", "2.36.1", {
+        Start: `<<link "Off">><<run Setting.setValue("hints", false)>><</link>>`,
+    }, `Setting.addToggle("hints", {default: true, onInit: function () {
+        setup.showHints = settings.hints;
+    }});`);
+    const e = loadEngineFromHtml(html);
+    e.start();
+    e.activate(findLink(e, "Off"));
+    const save = e.saveData();
+    const fresh = loadEngineFromHtml(html);
+    fresh.start();
+    fresh.loadData(save);
+    check("SugarCube: restored settings rerun onInit", fresh.format.env.settings.hints === false && fresh.format.env.setup.showHints === false, { settings: fresh.format.env.settings, setup: fresh.format.env.setup });
+});
+
 test("SugarCube HTML buttons tolerate quoted angle brackets", () => {
     const e = loadEngineFromHtml(storyHtml("SugarCube", "2.36.1", {
         Start: `<button aria-label="Compare" onclick="if (1 > 0) $.wiki('<<set $gt to true>>')">icon</button>`

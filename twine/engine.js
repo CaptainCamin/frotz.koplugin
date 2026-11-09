@@ -196,17 +196,17 @@ export class Engine {
         }
     }
 
-    _restore(m, memory) {
+    _restore(m, memory, options = {}) {
         this.vars = deserialize(m.vars) || {};
         this.visits = deserialize(m.visits) || {};
         this._setMemory(memory === undefined ? deserialize(m.memory) : memory);
         this.rng.setState(m.rng);
         if (this.history.length > m.hist) this.history.length = m.hist;
-        if (this.format.restore) this.format.restore(deserialize(m.fmt));
+        if (this.format.restore) this.format.restore(deserialize(m.fmt), options);
     }
 
     _replay(m, options = {}) {
-        this._restore(m, options.memory);
+        this._restore(m, options.memory, options);
         this.pendingGoto = null;
         this.replaying = true;
         this._suppressMemory = !!options.suppressMemory;
@@ -502,7 +502,7 @@ export class Engine {
     undo() {
         if (!this.canUndo()) return false;
         this.moments.pop();
-        this._replay(this.moments[this.moments.length - 1]);
+        this._replay(this.moments[this.moments.length - 1], { preservePreferences: true });
         return true;
     }
 
@@ -539,5 +539,6 @@ export class Engine {
         if (typeof d.moment.memory === "string") this._replay(d.moment);
         else this._replay(d.moment, { memory, suppressMemory: true });
         this._setMemory(memory);
+        if (this.format.afterLoad) this.format.afterLoad();
     }
 }

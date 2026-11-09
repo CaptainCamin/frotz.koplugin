@@ -822,12 +822,28 @@ export class SugarCube {
         return { settings: clone(this.env.settings) };
     }
 
-    restore(snapshot) {
-        if (!snapshot || !snapshot.settings) return;
-        // Author callbacks retain the settings object passed during init.
-        // Restore its contents without replacing that shared object.
+    applySettings(values) {
         for (const key of Object.keys(this.env.settings)) delete this.env.settings[key];
-        Object.assign(this.env.settings, snapshot.settings);
+        if (values && typeof values === "object" && !Array.isArray(values)) {
+            for (const [key, value] of Object.entries(values)) this.env.settings[key] = this.copySetting(value);
+        }
+    }
+
+    restore(snapshot, options = {}) {
+        // Undo keeps player preferences; saves replay the passage-entry values.
+        if (options.preservePreferences) {
+            this.applySettings(this.settingStore());
+            return;
+        }
+        if (snapshot && snapshot.settings) this.applySettings(snapshot.settings);
+    }
+
+    afterLoad() {
+        // Fresh players initialize before restorestate arrives; rerun setting
+        // init callbacks against the restored values for setup/Config effects.
+        for (const def of this.settingDefs.values()) {
+            if (typeof def.onInit === "function") def.onInit.call(def);
+        }
     }
 
     settingStore() {
