@@ -108,6 +108,31 @@ function at(re, s, i) {
     return re.exec(s);
 }
 
+// Find the end of an opening HTML tag without treating > inside a quoted
+// attribute value (common in onclick handlers) as the tag's end.
+function htmlTagEnd(s, i) {
+    let quote = null;
+    for (let j = i; j < s.length; j++) {
+        const c = s[j];
+        if (quote) {
+            if (c === quote) quote = null;
+        } else if (c === '"' || c === "'") quote = c;
+        else if (c === ">") return j;
+    }
+    return -1;
+}
+
+function openingTag(s, i) {
+    const m = at(/<([A-Za-z][\w-]*)/y, s, i);
+    if (!m) return null;
+    const nameEnd = i + m[0].length;
+    const boundary = s[nameEnd];
+    if (boundary !== undefined && !/[\s/>]/.test(boundary)) return null;
+    const end = htmlTagEnd(s, nameEnd);
+    if (end < 0) return null;
+    return { name: m[1].toLowerCase(), attrs: s.slice(nameEnd, end), text: s.slice(i, end + 1), end: end + 1 };
+}
+
 // End of a macro's arguments: index of the ">>" that closes it.
 function argsEnd(s, i) {
     const start = i;
@@ -248,28 +273,10 @@ class Parser {
                 }
                 // Accessible labels on simple icon elements are their text-mode
                 // equivalent (notably board-game pieces drawn with icon fonts).
-                const labelled = at(/<(div|span)\b([^>]*)>([^<]*)<\/\1\s*>/iy, s, i);
-                if (labelled) {
-                    const attrs = parseAttrs(labelled[2]);
-                    if (attrs["aria-label"] !== undefined) {
-                        push({ t: "labelled", open: "<" + labelled[1] + labelled[2] + ">",
-                            close: "</" + labelled[1] + ">", label: attrs["aria-label"],
-                            dynamic: /@aria-label\s*=/i.test(labelled[2]) });
-                        this.i += labelled[0].length;
-                        continue;
-                    }
-                }
-                const button = at(/<button\b([^>]*)>([\s\S]*?)<\/button\s*>/iy, s, i);
-                if (button) {
-                    const attrs = parseAttrs(button[1]);
-                    if (attrs.onclick !== undefined) {
-                        push({ t: "htmlbutton", label: attrs["aria-label"], body: button[2], code: attrs.onclick,
-                            dynamicLabel: /@aria-label\s*=/i.test(button[1]),
-                            dynamicCode: /@onclick\s*=/i.test(button[1]) });
-                        this.i += button[0].length;
-                        continue;
-                    }
-                }
+                const labelled = this.labelledAt(i);
+                if (labelled) { push(labelled.node); this.i = labelled.end; continue; }
+                const button = this.htmlButtonAt(i);
+                if (button) { push(button.node); this.i = button.end; continue; }
                 const m = at(TAG_RE, s, i);
                 if (m) { text += m[0]; this.i += m[0].length; continue; }
             }
@@ -344,6 +351,34 @@ class Parser {
         const setter = split >= 0 ? inner.slice(split + 2) : null;
         const { label, target } = parseLink(body, true);
         return { node: { t: "link", label, target: target.trim(), setter }, end: e + 2 };
+    }
+
+    labelledAt(i) {
+        const open = openingTag(this.s, i);
+        if (!open || (open.name !== "div" && open.name !== "span")) return null;
+        const attrs = parseAttrs(open.attrs);
+        if (attrs["aria-label"] === undefined) return null;
+        const closeStart = this.s.indexOf("<", open.end);
+        if (closeStart < 0) return null;
+        const close = at(/<\/(div|span)\s*>/iy, this.s, closeStart);
+        if (!close || close[1].toLowerCase() !== open.name) return null;
+        const end = closeStart + close[0].length;
+        return { node: { t: "labelled", open: open.text, close: this.s.slice(closeStart, end),
+            label: attrs["aria-label"], dynamic: /@aria-label\s*=/i.test(open.attrs) }, end };
+    }
+
+    htmlButtonAt(i) {
+        const open = openingTag(this.s, i);
+        if (!open || open.name !== "button") return null;
+        const attrs = parseAttrs(open.attrs);
+        if (attrs.onclick === undefined) return null;
+        const closeRe = /<\/button\s*>/gi;
+        closeRe.lastIndex = open.end;
+        const close = closeRe.exec(this.s);
+        if (!close) return null;
+        return { node: { t: "htmlbutton", label: attrs["aria-label"], body: this.s.slice(open.end, close.index),
+            code: attrs.onclick, dynamicLabel: /@aria-label\s*=/i.test(open.attrs),
+            dynamicCode: /@onclick\s*=/i.test(open.attrs) }, end: close.index + close[0].length };
     }
 
     macroNode(tag) {
@@ -524,13 +559,15 @@ export class SugarCube {
         this.env = {
             State,
             setup: {},
-            settings: {},
-            Setting: inert(null, Object.fromEntries(["addToggle", "addList", "addValue"].map(method =>
-                [method, (name, options = {}) => {
-                    self.settingDefs.set(name, { ...options, type: method });
-                    self.env.settings[name] = options.default ?? (method === "addToggle" ? false : options.list?.[0]);
-                    if (typeof options.onInit === "function") options.onInit.call(options);
-                }]))),
+            settings: Object.create(null),
+            Setting: inert(null, {
+                addToggle: (name, options = {}) => self.addSetting(name, options, "addToggle"),
+                addList: (name, options = {}) => self.addSetting(name, options, "addList"),
+                addValue: (name, options = {}) => self.addSetting(name, options, "addValue"),
+                getValue: (name) => self.copySetting(self.env.settings[name]),
+                setValue: (name, value) => self.setSetting(name, value),
+                save: () => self.persistSettings(),
+            }),
             Config: new Proxy({ debug: false, passages: {}, history: {}, saves: {},
                 navigation: {}, ui: { updateStoryElements: true } }, {
                 get: (t, k) => (k in t ? t[k] : (t[k] = inert())),
@@ -616,9 +653,9 @@ export class SugarCube {
             tags: (name) => (engine.passage(name || engine.passageName) || { tags: [] }).tags.slice(),
             turns: () => engine.history.length,
             time: () => engine.clock,
-            memorize: (k, v) => { engine.memory[k] = clone(v); },
+            memorize: (k, v) => { if (!engine._suppressMemory) engine.memory[k] = clone(v); },
             recall: (k, d) => Object.prototype.hasOwnProperty.call(engine.memory, k) ? clone(engine.memory[k]) : d,
-            forget: (k) => { delete engine.memory[k]; },
+            forget: (k) => { if (!engine._suppressMemory) delete engine.memory[k]; },
             clone: (v) => clone(v),
             UI: inert(null, {
                 restart: () => engine.restart(),
@@ -781,16 +818,43 @@ export class SugarCube {
         }
     }
 
-    snapshot() {
-        return { settings: clone(this.env.settings) };
+    settingStore() {
+        let store = this.engine.preferences.settings;
+        if (!store || typeof store !== "object" || Array.isArray(store)) {
+            store = this.engine.preferences.settings = Object.create(null);
+        }
+        return store;
     }
 
-    restore(snapshot) {
-        if (!snapshot || !snapshot.settings) return;
-        // Author callbacks retain the settings object passed during init.
-        // Restore its contents without replacing that shared object.
-        for (const key of Object.keys(this.env.settings)) delete this.env.settings[key];
-        Object.assign(this.env.settings, snapshot.settings);
+    copySetting(value) {
+        return value === undefined ? undefined : clone(value);
+    }
+
+    persistSettings() {
+        const store = this.settingStore();
+        for (const name of Object.keys(this.env.settings)) {
+            const value = this.copySetting(this.env.settings[name]);
+            if (value === undefined) delete store[name];
+            else store[name] = value;
+        }
+    }
+
+    addSetting(name, options, type) {
+        this.settingDefs.set(name, { ...options, type });
+        const store = this.settingStore();
+        const fallback = options.default ?? (type === "addToggle" ? false : options.list?.[0]);
+        this.env.settings[name] = Object.prototype.hasOwnProperty.call(store, name)
+            ? this.copySetting(store[name]) : this.copySetting(fallback);
+        if (typeof options.onInit === "function") options.onInit.call(options);
+        this.persistSettings();
+    }
+
+    setSetting(name, value) {
+        if (this.engine.replaying) return;
+        this.env.settings[name] = this.copySetting(value);
+        const def = this.settingDefs.get(name);
+        if (def && typeof def.onChange === "function") def.onChange.call(def);
+        this.persistSettings();
     }
 
     resolvePassage(name) {
@@ -846,8 +910,7 @@ export class SugarCube {
                 const label = String(def.label || name) + ": " + display;
                 if (options && options.length) {
                     this.engine.addLink(w, label, () => {
-                        this.env.settings[name] = options[(options.indexOf(value) + 1) % options.length];
-                        if (typeof def.onChange === "function") def.onChange.call(def);
+                        this.setSetting(name, options[(options.indexOf(value) + 1) % options.length]);
                         this.engine.fillRegion(region, draw, "replace");
                     });
                 } else w.text(label);

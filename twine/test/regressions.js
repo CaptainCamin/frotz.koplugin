@@ -268,6 +268,65 @@ test("SugarCube generated HTML game controls", () => {
     check("SugarCube: generated onclick runs $.wiki with its bound loop action", e.vars.move === 2 && screenText(e).text.includes("Moved") && findLink(e, "Move 1") === undefined, screenText(e).text);
 });
 
+test("SugarCube memory actions replay once on save", () => {
+    const e = loadEngineFromHtml(storyHtml("SugarCube", "2.36.1", {
+        Start: `<<print recall("count", 0)>><<link "Bump">><<run memorize("count", recall("count", 0) + 1)>><</link>>`,
+    }));
+    e.start();
+    e.activate(findLink(e, "Bump"));
+    check("SugarCube: memory action advances once", e.memory.count === 1, e.memory);
+    e.loadData(e.saveData());
+    check("SugarCube: restoring a save does not repeat memory actions", e.memory.count === 1, e.memory);
+});
+
+test("SugarCube memory actions replay once on undo", () => {
+    const e = loadEngineFromHtml(storyHtml("SugarCube", "2.36.1", {
+        Start: `Count: <<print recall("count", 0)>> <<link "Bump">><<run memorize("count", recall("count", 0) + 1)>><<goto "Next">><</link>>`,
+        Next: "next",
+    }));
+    e.start();
+    e.activate(findLink(e, "Bump"));
+    check("SugarCube: navigating memory action advances once", e.passageName === "Next" && e.memory.count === 1, { passage: e.passageName, memory: e.memory });
+    e.undo();
+    check("SugarCube: undo restores memory before the action", e.passageName === "Start" && e.memory.count === undefined && screenText(e).text.startsWith("Count: 0"), { passage: e.passageName, memory: e.memory, text: screenText(e).text });
+});
+
+test("SugarCube older saves replace story memory", () => {
+    const e = loadEngineFromHtml(storyHtml("SugarCube", "2.36.1", {
+        Start: `<<if recall("finished", false)>>Completed!<</if>`,
+    }));
+    e.start();
+    const data = JSON.parse(e.saveData());
+    delete data.memory;
+    delete data.moment.memory;
+    e.memory.finished = true;
+    e.memory.stale = true;
+    e.loadData(JSON.stringify(data));
+    check("SugarCube: older saves clear stale story memory", Object.keys(e.memory).length === 0 && !screenText(e).text.includes("Completed!"), { memory: e.memory, text: screenText(e).text });
+});
+
+test("SugarCube settings survive author restart", () => {
+    const e = loadEngineFromHtml(storyHtml("SugarCube", "2.36.1", {
+        Start: `Hints: <<print settings.hints>> <<link "Restart">><<run Setting.setValue("hints", false)>><<run Engine.restart()>><</link>>`,
+    }, `Setting.addToggle("hints", {default: true});`));
+    e.start();
+    e.activate(findLink(e, "Restart"));
+    check("SugarCube: settings persist through author restart", e.format.env.settings.hints === false && screenText(e).text.includes("Hints: false"), screenText(e).text);
+});
+
+test("SugarCube HTML buttons tolerate quoted angle brackets", () => {
+    const e = loadEngineFromHtml(storyHtml("SugarCube", "2.36.1", {
+        Start: `<button aria-label="Compare" onclick="if (1 > 0) $.wiki('<<set $gt to true>>')">icon</button>`
+            + `<button aria-label="Macro" onclick="$.wiki('<<set $macro to 42>>')">icon</button>`,
+    }));
+    e.start();
+    check("SugarCube: quoted > keeps the HTML button action", findLink(e, "Compare") !== undefined, screenText(e).text);
+    e.activate(findLink(e, "Compare"));
+    check("SugarCube: literal > onclick runs", e.vars.gt === true, e.vars);
+    e.activate(findLink(e, "Macro"));
+    check("SugarCube: <<set>> onclick runs", e.vars.macro === 42, e.vars);
+});
+
 if (failures) {
     print(`\n${failures} failed`);
     std.exit(1);

@@ -44,6 +44,7 @@ export class Engine {
         this.createFormat = createFormat;
         this.rng = new Rng();
         this.memory = Object.create(null); // story-wide data survives restart
+        this.preferences = Object.create(null); // player preferences survive restart and replay
         // The player replaces this with one that knows the story's folder and
         // the cache for data: images; without them only remote images resolve.
         this.images = new ImageTable(null, null);
@@ -66,6 +67,7 @@ export class Engine {
         this.lineRequest = null;
         this.pendingGoto = null;
         this.replaying = false;
+        this._suppressMemory = false;
         this._prompts = [];
         this._linkIds = 0;
         this._regionIds = 0;
@@ -138,6 +140,7 @@ export class Engine {
             passage: p.name,
             vars: serialize(this.vars),
             visits: serialize(this.visits),
+            memory: serialize(this.memory),
             rng: this.rng.getState(),
             hist: this.history.length,
             fmt: this.format.snapshot ? serialize(this.format.snapshot()) : null,
@@ -179,18 +182,27 @@ export class Engine {
         }
     }
 
-    _restore(m) {
+    _setMemory(value) {
+        for (const key of Object.keys(this.memory)) delete this.memory[key];
+        if (value && typeof value === "object" && !Array.isArray(value)) {
+            for (const [key, v] of Object.entries(value)) this.memory[key] = v;
+        }
+    }
+
+    _restore(m, memory) {
         this.vars = deserialize(m.vars) || {};
         this.visits = deserialize(m.visits) || {};
+        this._setMemory(memory === undefined ? deserialize(m.memory) : memory);
         this.rng.setState(m.rng);
         if (this.history.length > m.hist) this.history.length = m.hist;
         if (this.format.restore) this.format.restore(deserialize(m.fmt));
     }
 
-    _replay(m) {
-        this._restore(m);
+    _replay(m, options = {}) {
+        this._restore(m, options.memory);
         this.pendingGoto = null;
         this.replaying = true;
+        this._suppressMemory = !!options.suppressMemory;
         this._prompts = m.prompts.slice();
         try {
             this._begin(m);
@@ -201,6 +213,7 @@ export class Engine {
             }
         } finally {
             this.replaying = false;
+            this._suppressMemory = false;
             this.pendingGoto = null;
         }
     }
@@ -506,12 +519,12 @@ export class Engine {
         if (!this.passage(d.moment.passage)) {
             throw new Error(`The saved passage "${d.moment.passage}" no longer exists.`);
         }
-        if (typeof d.memory === "string") {
-            const memory = deserialize(d.memory);
-            if (memory && typeof memory === "object" && !Array.isArray(memory)) Object.assign(this.memory, memory);
-        }
+        const savedMemory = typeof d.memory === "string" ? deserialize(d.memory) : null;
+        const memory = savedMemory && typeof savedMemory === "object" && !Array.isArray(savedMemory) ? savedMemory : {};
         this.history = Array.isArray(d.history) ? d.history : [];
         this.moments = [d.moment];
-        this._replay(d.moment);
+        if (typeof d.moment.memory === "string") this._replay(d.moment);
+        else this._replay(d.moment, { memory, suppressMemory: true });
+        this._setMemory(memory);
     }
 }
