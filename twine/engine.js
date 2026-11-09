@@ -534,10 +534,15 @@ export class Engine {
             const preferences = deserialize(d.preferences);
             if (preferences && typeof preferences === "object" && !Array.isArray(preferences)) this._setPreferences(preferences);
         }
-        if (this.format.prepareLoad) this.format.prepareLoad();
         this.history = Array.isArray(d.history) ? d.history : [];
         this.moments = [d.moment];
-        if (typeof d.moment.memory === "string") this._replay(d.moment);
+        this.current = d.moment;
+        const hasMomentMemory = typeof d.moment.memory === "string";
+        // Let setting init callbacks read saved progress before replay renders;
+        // replay restores again afterward, so their mutations are not committed.
+        this._restore(d.moment, hasMomentMemory ? undefined : memory);
+        if (this.format.prepareLoad) this.format.prepareLoad();
+        if (hasMomentMemory) this._replay(d.moment);
         else this._replay(d.moment, { memory, suppressMemory: true });
         this._setMemory(memory);
     }

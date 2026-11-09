@@ -408,6 +408,24 @@ test("SugarCube undo preserves unpersisted settings", () => {
     check("SugarCube: undo keeps story-set settings", e.passageName === "Start" && e.format.env.settings.difficulty === "hard" && e.format.env.settings.hints === true, e.format.env.settings);
 });
 
+test("SugarCube setting init reads saved progress", () => {
+    const html = storyHtml("SugarCube", "2.36.1", {
+        Start: `<<link "Go">><<set $level to 3>><<goto "Next">><</link>>`,
+        Next: "next",
+        StoryInit: `<<set $level to 1>>`,
+    }, `Setting.addToggle("hints", {default: true, onInit: function () {
+        setup.maxLevel = State.variables.level;
+    }});`);
+    const e = loadEngineFromHtml(html);
+    e.start();
+    e.activate(findLink(e, "Go"));
+    const save = e.saveData();
+    const fresh = loadEngineFromHtml(html);
+    fresh.start();
+    fresh.loadData(save);
+    check("SugarCube: onInit sees saved variables", fresh.vars.level === 3 && fresh.format.env.setup.maxLevel === 3, { vars: fresh.vars, setup: fresh.format.env.setup });
+});
+
 test("SugarCube HTML buttons tolerate quoted angle brackets", () => {
     const e = loadEngineFromHtml(storyHtml("SugarCube", "2.36.1", {
         Start: `<button aria-label="Compare" onclick="if (1 > 0) $.wiki('<<set $gt to true>>')">icon</button>`
