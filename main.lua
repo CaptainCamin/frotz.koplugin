@@ -75,16 +75,16 @@ local Frotz = WidgetContainer:extend{
 function Frotz:init()
     self.ui.menu:registerToMainMenu(self)
     self:_registerSimpleUI()
+    require("bookshelf_integration").register(self)
 end
 
--- Launch the plugin from outside its own menu: opens the Recent games picker,
--- or the game browser when nothing has been played yet. Simple UI's generic
+-- Launch the plugin from outside its own menu: opens the complete game library. Simple UI's generic
 -- "add a plugin as a quick action" scan looks for a method named
 -- onShow/show/open/launch/onOpen (our main-menu entry is a submenu, so it has
 -- no callback for that scan to reuse) — `launch` is that hook, and it is a
 -- reasonable entry point for any other caller too.
 function Frotz:launch()
-    self:_openRecentPicker(true)
+    self:_openLibrary()
 end
 
 -- ── Simple UI integration ───────────────────────────────────────────────────────
@@ -128,6 +128,11 @@ end
 
 function Frotz:_buildMenuItems()
     local items = {}
+
+    table.insert(items, {
+        text     = _("Game library"),
+        callback = function() self:_openLibrary() end,
+    })
 
     table.insert(items, {
         text     = _("Open game…"),
@@ -284,6 +289,61 @@ function Frotz:_openRecentPicker(browse_if_empty)
     }
     menu.close_callback = function() UIManager:close(menu) end
     UIManager:show(menu)
+end
+
+-- A complete library, independent of the bounded recent-games list.
+function Frotz:_libraryEntries()
+    local library = GameLibrary.open()
+    local changed = false
+    for _, path in ipairs(self:_recentGames()) do
+        if not library:get(path) and lfs.attributes(path, "mode") == "file" then
+            library.games[path] = { added = os.time() }
+            changed = true
+        end
+    end
+    if changed then library:save() end
+    return library:entries()
+end
+
+function Frotz:_openLibrary()
+    local Menu = require("ui/widget/menu")
+    local menu
+    local items = { {
+        text = _("Add games from folder…"),
+        callback = function() self:_importGameFolder() end,
+    }, {
+        text = _("Find games on IFDB…"),
+        callback = function() self:_openIfdbBrowser() end,
+    } }
+    for _, entry in ipairs(self:_libraryEntries()) do
+        local path = entry.path
+        items[#items + 1] = {
+            text = entry.title,
+            mandatory = entry.author,
+            callback = function() self:_startGame(path) end,
+        }
+    end
+    menu = Menu:new{
+        title = _("Game library"), item_table = items,
+        is_popout = false, is_borderless = true,
+        covers_fullscreen = true, title_bar_fm_style = true,
+    }
+    menu.close_callback = function() UIManager:close(menu) end
+    UIManager:show(menu)
+end
+
+function Frotz:_importGameFolder()
+    self:_loadSettings()
+    UIManager:show(PathChooser:new{
+        select_directory = true,
+        path = self._settings:readSetting("game_directory") or DataStorage:getDataDir() .. "/ifgames",
+        onConfirm = function(path)
+            self:_saveSetting("game_directory", path)
+            local count = GameLibrary.open():scan(path)
+            self:_openLibrary()
+            UIManager:show(InfoMessage:new{ text = T(_("Added %1 games to the library."), count) })
+        end,
+    })
 end
 
 -- ── Display settings ────────────────────────────────────────────────────────────
@@ -472,6 +532,13 @@ function Frotz:_startGame(gamefile)
     local GameView = require("gameview")
     local RemGlk   = require("engines/remglk")
 
+    if lfs.attributes(gamefile, "mode") ~= "file" then
+        UIManager:show(InfoMessage:new{
+            text = T(_("Game file not found:\n%1"), gamefile),
+        })
+        return
+    end
+
     -- Pick the interpreter from the extension, then find its binary.
     local vm = Resolver.vm_for(gamefile)
     if not vm then
@@ -531,6 +598,7 @@ function Frotz:_startGame(gamefile)
     local _dir, fname   = util.splitFilePathName(gamefile)
     local library       = GameLibrary.open()
     local known         = library:get(gamefile)
+    library:put(gamefile, { last_played = os.time() })
     local known_title   = known and known.title
     local save_dir      = self:_saveDirFor(gamefile)
     util.makePath(save_dir)

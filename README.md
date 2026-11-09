@@ -92,6 +92,27 @@ New to the genre? The [beginner's tutorial](TUTORIAL.md) walks you through a fir
 
 To get IF games, use the plugin's *Find games on IFDB…* entry, or check one of the dedicated websites: [IFDB](https://ifdb.org/search?browse) or [IFWiki](https://www.ifwiki.org/Special:Drilldown/Games).
 
+## Game library and Bookshelf
+
+Open **Tools → Interactive Fiction → Game library** to see all your games,
+independently of the recent-games limit. Games downloaded through IFDB and games
+opened in Frotz are included automatically. Choose **Add games from folder…** to
+import an existing collection, including subfolders. Ordinary HTML pages and
+symbolic links are skipped; Twine stories are detected by their contents.
+Importing again preserves existing titles, authors and covers. Missing files
+are hidden until they become available again; their metadata is retained.
+
+With [AndyHazz's Bookshelf plugin](https://github.com/AndyHazz/bookshelf.koplugin)
+installed (a version supporting source API 1), add or edit a shelf and choose
+**Source / grouping → Game library**. Bookshelf displays the library with its
+usual sorting and filtering, including IFDB covers and authors where available.
+Opening a game launches Frotz, including its usual save/restore prompt. Frotz
+also works without Bookshelf installed. The Simple UI quick action opens the
+library; its homescreen module continues to show recent games.
+
+Developer checks: run `texlua tests/library.lua` (or `lua tests/library.lua`) from
+the plugin directory for headless library and source-adapter tests.
+
 ## About Twine games
 
 [Twine](https://twinery.org) made interactive fiction much easier to write: instead of a parser and typed commands, a story is a web of passages joined by links, and the reader simply chooses. It opened the genre to many new authors, and some of the most talked-about IF of the last fifteen years was made with it — Porpentine's *howling dogs* and *With Those We Love Alive*, Brendan Patrick Hennessy's *Birdland*, *Depression Quest*. Being easier to write, these games became an excellent medium for personal and emotional journeys and for themes that were rarely explored before: personal experience and mental health, identity, gender and social issues, literary and philosophical exploration. They are also simpler to play: you follow links instead of typing commands and guessing the right wording.

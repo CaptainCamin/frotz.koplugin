@@ -14,19 +14,26 @@ local DataStorage = require("datastorage")
 local LuaSettings = require("luasettings")
 local lfs         = require("libs/libkoreader-lfs")
 local util        = require("util")
+local Resolver    = require("engines/resolver")
 
 local Library = {}
 Library.__index = Library
+
+-- The IFDB browser, game launch, and Bookshelf can hold handles at once. Share
+-- one registry so a later save cannot replace newer fields with a stale copy.
+local shared
 
 function Library.dir()
     return DataStorage:getDataDir() .. "/frotz_library"
 end
 
 function Library.open()
+    if shared then return shared end
     local self = setmetatable({}, Library)
     util.makePath(Library.dir() .. "/covers")
     self.store = LuaSettings:open(Library.dir() .. "/index.lua")
     self.games = self.store:readSetting("games") or {}
+    shared = self
     return self
 end
 
@@ -51,6 +58,58 @@ end
 function Library:save()
     self.store:saveSetting("games", self.games)
     self.store:flush()
+    -- The registry is session-wide, including when another UI owns the shelf.
+    local Sources = package.loaded["lib/bookshelf_sources"]
+    if Sources and Sources.changed then Sources.changed("frotz") end
+end
+
+--- Existing, supported games, sorted by display title. Never discard metadata
+-- for missing files: removable storage may simply be disconnected.
+function Library:entries()
+    local entries = {}
+    for path, entry in pairs(self.games) do
+        if lfs.attributes(path, "mode") == "file" and Resolver.is_supported(path) then
+            local item = {}
+            for k, v in pairs(entry) do item[k] = v end
+            item.path = path
+            item.title = item.title or path:match("[^/]+$") or path
+            entries[#entries + 1] = item
+        end
+    end
+    table.sort(entries, function(a, b)
+        local at, bt = a.title:lower(), b.title:lower()
+        return at == bt and a.path < b.path or at < bt
+    end)
+    return entries
+end
+
+--- Import a directory tree, ignoring symbolic links and non-story HTML files.
+-- Flush once for the entire import; preserve downloaded metadata.
+function Library:scan(directory)
+    local added, visited = 0, {}
+    local function walk(dir)
+        if visited[dir] then return end
+        visited[dir] = true
+        local ok, iter, state = pcall(lfs.dir, dir)
+        if not ok then return end
+        for name in iter, state do
+            if name ~= "." and name ~= ".." then
+                local path = dir:gsub("/+$", "") .. "/" .. name
+                local mode = lfs.symlinkattributes(path, "mode")
+                if mode == "directory" then
+                    walk(path)
+                elseif mode == "file" and Resolver.is_supported(path)
+                    and (Resolver.vm_for(path) ~= "twine" or Resolver.is_twine_file(path) == true)
+                    and not self.games[path] then
+                    self.games[path] = { added = os.time() }
+                    added = added + 1
+                end
+            end
+        end
+    end
+    walk(directory == "/" and "/" or directory:gsub("/+$", ""))
+    if added > 0 then self:save() end
+    return added
 end
 
 --- The story file we already have for an IFDB game, if it still exists.
